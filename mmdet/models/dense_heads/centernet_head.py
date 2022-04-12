@@ -150,10 +150,14 @@ class CenterNetHead(BaseDenseHead, BBoxTestMixin):
         wh_pred = wh_preds[0]
         offset_pred = offset_preds[0]
 
-        target_result, avg_factor = self.get_targets(gt_bboxes, gt_labels,
-                                                     center_heatmap_pred.shape,
-                                                     img_metas[0]['pad_shape'])
-
+        # target_result, avg_factor = self.get_targets(gt_bboxes, gt_labels,
+        #                                              center_heatmap_pred.shape,
+        #                                              img_metas[0]['pad_shape'])
+        # hdDebug
+        target_result, avg_factor = self.get_targets_ipu(gt_bboxes, gt_labels,
+                                                         center_heatmap_pred.shape,
+                                                         img_metas[0]['pad_shape'])
+        print('hdDebug')
         center_heatmap_target = target_result['center_heatmap_target']
         wh_target = target_result['wh_target']
         offset_target = target_result['offset_target']
@@ -246,6 +250,20 @@ class CenterNetHead(BaseDenseHead, BBoxTestMixin):
             wh_target=wh_target,
             offset_target=offset_target,
             wh_offset_target_weight=wh_offset_target_weight)
+        return target_result, avg_factor
+
+    def get_targets_ipu(self, gt_bboxes, gt_labels, feat_shape, img_shape):
+        center_heatmap_target = torch.rand(16, 80, 128, 128)
+        wh_target = torch.rand(16, 2, 128, 128)
+        offset_target = torch.rand(16, 2, 128, 128)
+        wh_offset_target_weight = torch.rand(16, 2, 128, 128)
+        avg_factor = torch.ones(1)[0]
+        target_result = dict(
+            center_heatmap_target=center_heatmap_target,
+            wh_target=wh_target,
+            offset_target=offset_target,
+            wh_offset_target_weight=wh_offset_target_weight
+        )
         return target_result, avg_factor
 
     @force_fp32(apply_to=('center_heatmap_preds', 'wh_preds', 'offset_preds'))

@@ -165,7 +165,7 @@ def train_detector(model,
             device_ids=[torch.cuda.current_device()],
             broadcast_buffers=False,
             find_unused_parameters=find_unused_parameters)
-    else:
+    elif not cfg.ipu_replicas:
         model = MMDataParallel(model, device_ids=cfg.gpu_ids)
 
     # build optimizer

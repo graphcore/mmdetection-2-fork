@@ -122,3 +122,12 @@ work_dirs/
 *.pth
 *.py~
 *.sh~
+
+# IPU
+*.pvti
+*.pvti-journal
+/cache_engine
+/report
+
+# del it in submit branch
+configs/myconfigs

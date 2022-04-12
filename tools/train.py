@@ -35,6 +35,11 @@ def parse_args():
         '--no-validate',
         action='store_true',
         help='whether not to evaluate the checkpoint during training')
+    parser.add_argument(
+        '--ipu-replicas',
+        type=int,
+        default=None,
+        help='num of ipu replicas to use')
     group_gpus = parser.add_mutually_exclusive_group()
     group_gpus.add_argument(
         '--gpus',
@@ -158,6 +163,8 @@ def main():
                       'in `gpu_ids` now.')
     if args.gpus is None and args.gpu_ids is None:
         cfg.gpu_ids = [args.gpu_id]
+
+    cfg.ipu_replicas = args.ipu_replicas
 
     # init distributed env first, since logger depends on the dist info.
     if args.launcher == 'none':
