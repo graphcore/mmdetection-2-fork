@@ -12,6 +12,7 @@ from mmdet.core import (bbox_cxcywh_to_xyxy, bbox_xyxy_to_cxcywh,
 from mmdet.models.utils import build_transformer
 from ..builder import HEADS, build_loss
 from .anchor_free_head import AnchorFreeHead
+import hdDebug
 
 
 @HEADS.register_module()
@@ -382,8 +383,11 @@ class DETRHead(AnchorFreeHead):
                 cls_scores.new_tensor([cls_avg_factor]))
         cls_avg_factor = max(cls_avg_factor, 1)
 
-        loss_cls = self.loss_cls(
-            cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
+        if hdDebug.skip_loss_cls:
+            loss_cls = cls_scores.sum()
+        else:
+            loss_cls = self.loss_cls(
+                cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
 
         # Compute the average number of gt boxes across all gpus, for
         # normalization purposes
@@ -511,11 +515,23 @@ class DETRHead(AnchorFreeHead):
 
         num_bboxes = bbox_pred.size(0)
         # assigner and sampler
-        assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes,
-                                             gt_labels, img_meta,
-                                             gt_bboxes_ignore)
-        sampling_result = self.sampler.sample(assign_result, bbox_pred,
-                                              gt_bboxes)
+        if hdDebug.skip_assigner:
+            from mmdet.core.bbox.assigners.assign_result import AssignResult
+            num_gts = gt_bboxes.shape[0]
+            gt_inds = torch.range(1,100)
+            gt_inds = (gt_inds * (gt_inds<=num_gts)).long()
+            max_overlaps = None
+            labels = (torch.ones(100) * (-1*(torch.range(1,100)>num_gts))).long()
+            assign_result = AssignResult(num_gts,gt_inds,max_overlaps,labels)
+        else:
+            assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes,
+                                                gt_labels, img_meta,
+                                                gt_bboxes_ignore)
+        if hdDebug.skip_sampler:
+            pass
+        else:
+            sampling_result = self.sampler.sample(assign_result, bbox_pred,
+                                                gt_bboxes)
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
 
@@ -576,6 +592,10 @@ class DETRHead(AnchorFreeHead):
             loss_inputs = outs + (gt_bboxes, img_metas)
         else:
             loss_inputs = outs + (gt_bboxes, gt_labels, img_metas)
+        if hdDebug.skip_loss:
+            loss1 = outs[0][0].sum()
+            loss2 = outs[1][0].sum()
+            return {'loss1':loss1, 'loss2':loss2}
         losses = self.loss(*loss_inputs, gt_bboxes_ignore=gt_bboxes_ignore)
         return losses
 

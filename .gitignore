@@ -131,3 +131,6 @@ work_dirs/
 
 # del it in submit branch
 configs/myconfigs
+*.png
+*.npy
+*.popef

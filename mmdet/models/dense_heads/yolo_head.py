@@ -16,6 +16,7 @@ from mmdet.core import (build_assigner, build_bbox_coder,
 from ..builder import HEADS, build_loss
 from .base_dense_head import BaseDenseHead
 from .dense_test_mixins import BBoxTestMixin
+import hdDebug
 
 
 @HEADS.register_module()
@@ -459,9 +460,17 @@ class YOLOV3Head(BaseDenseHead, BBoxTestMixin):
         anchor_strides = torch.cat(anchor_strides)
         assert len(anchor_strides) == len(concat_anchors) == \
                len(concat_responsible_flags)
-        assign_result = self.assigner.assign(concat_anchors,
-                                             concat_responsible_flags,
-                                             gt_bboxes)
+        if hdDebug.skip_assigner:
+            from mmdet.core.bbox.assigners.assign_result import AssignResult
+            assign_result = AssignResult(None,None,None,None)
+            assign_result.load(f'yolo_assign_result_{hdDebug.assigner_counter}')
+            hdDebug.assigner_counter += 1
+        else:
+            assign_result = self.assigner.assign(concat_anchors,
+                                                 concat_responsible_flags,
+                                                 gt_bboxes)
+            # assign_result.save(f'yolo_assign_result_{hdDebug.assigner_counter}')# hdDebug
+            # hdDebug.assigner_counter += 1
         sampling_result = self.sampler.sample(assign_result, concat_anchors,
                                               gt_bboxes)
 

@@ -167,6 +167,9 @@ def train_detector(model,
             find_unused_parameters=find_unused_parameters)
     elif not cfg.ipu_replicas:
         model = MMDataParallel(model, device_ids=cfg.gpu_ids)
+    else:
+        import hdDebug
+        hdDebug.ipu_mode = True
 
     # build optimizer
     auto_scale_lr(cfg, distributed, logger)
@@ -200,8 +203,15 @@ def train_detector(model,
     # fp16 setting
     fp16_cfg = cfg.get('fp16', None)
     if fp16_cfg is not None:
-        optimizer_config = Fp16OptimizerHook(
-            **cfg.optimizer_config, **fp16_cfg, distributed=distributed)
+        if cfg.ipu_replicas:
+            from mmcv.device.ipu import IPUFp16OptimizerHook
+            optimizer_config = IPUFp16OptimizerHook(
+                **cfg.optimizer_config,
+                loss_scale=fp16_cfg['loss_scale'],
+                distributed=distributed)
+        else:
+            optimizer_config = Fp16OptimizerHook(
+                **cfg.optimizer_config, **fp16_cfg, distributed=distributed)
     elif distributed and 'type' not in cfg.optimizer_config:
         optimizer_config = OptimizerHook(**cfg.optimizer_config)
     else:

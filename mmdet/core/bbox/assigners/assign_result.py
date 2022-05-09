@@ -2,6 +2,7 @@
 import torch
 
 from mmdet.utils import util_mixins
+import numpy as np
 
 
 class AssignResult(util_mixins.NiceRepr):
@@ -47,6 +48,25 @@ class AssignResult(util_mixins.NiceRepr):
         self.labels = labels
         # Interface for possible user-defined properties
         self._extra_properties = {}
+    
+    def save(self, name):#hdDebug
+        np_dict = {'num_gts':self.num_gts.numpy(), 'gt_inds':self.gt_inds.numpy(),
+        'max_overlaps':self.max_overlaps.numpy()}
+        if self.labels is None:
+            np_dict['labels'] = None
+        else:
+            np_dict['labels'] = self.labels.numpy()
+        np.save(f'{name}.npy',np_dict,allow_pickle=True)
+    
+    def load(self, name):#hdDebug
+        np_dict = np.load(f'{name}.npy',allow_pickle=True).item()
+        self.num_gts = torch.from_numpy(np_dict['num_gts'])
+        self.gt_inds = torch.from_numpy(np_dict['gt_inds'])
+        self.max_overlaps = torch.from_numpy(np_dict['max_overlaps'])
+        labels = np_dict.pop('labels',None)
+        if labels is not None:
+            labels = torch.from_numpy(labels)
+        self.labels = labels
 
     @property
     def num_preds(self):
