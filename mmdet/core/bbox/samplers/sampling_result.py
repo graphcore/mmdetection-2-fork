@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
+import torch.nn.functional as F
 
 from mmdet.utils import util_mixins
+from ...utils.misc import slice_statically
 
 
 class SamplingResult(util_mixins.NiceRepr):
@@ -151,3 +153,57 @@ class SamplingResult(util_mixins.NiceRepr):
             rng=rng)
         self = sampler.sample(assign_result, bboxes, gt_bboxes, gt_labels)
         return self
+
+
+class StaticSamplingResult(SamplingResult):
+    """Bbox sampling result.
+
+    Args:
+        pos_inds (Tensor): positive indices of anchor
+        neg_inds (Tensor): negative indices of anchor
+
+    Example:
+        >>> # xdoctest: +IGNORE_WANT
+        >>> from mmdet.core.bbox.samplers.sampling_result import *  # NOQA
+        >>> self = SamplingResult.random(rng=10)
+        >>> print(f'self = {self}')
+        self = <SamplingResult({
+            'neg_bboxes': torch.Size([12, 4]),
+            'neg_inds': tensor([ 0,  1,  2,  4,  5,  6,  7,  8,  9, 10, 11, 12]),
+            'num_gts': 4,
+            'pos_assigned_gt_inds': tensor([], dtype=torch.int64),
+            'pos_bboxes': torch.Size([0, 4]),
+            'pos_inds': tensor([], dtype=torch.int64),
+            'pos_is_gt': tensor([], dtype=torch.uint8)
+        })>
+    """
+
+    def __init__(self, pos_inds, neg_inds, bboxes, gt_bboxes, assign_result,
+                 gt_flags):
+        self.pos_inds = pos_inds
+        self.neg_inds = neg_inds
+        self.gt_flags = gt_flags
+
+        self.pos_bboxes = slice_statically(bboxes, pos_inds, dim=0)
+        self.pos_flags = pos_inds >= 0
+        self.neg_bboxes = slice_statically(bboxes, neg_inds, dim=0)
+        self.neg_flags = neg_inds >= 0
+
+        self.num_gts = (gt_bboxes.sum(-1)>0).sum()
+
+        # pos_assigned_gt_inds maps from sampled positive box to gt-box idx(start from 0)
+        # slice_statically will return 0 for padded place and
+        # self.pos_assigned_gt_inds will be -1 at padded place
+        self.pos_assigned_gt_inds = slice_statically(assign_result.gt_inds,
+                                                     pos_inds, dim=0) - 1
+        self.pos_gt_bboxes = slice_statically(gt_bboxes,
+                                              self.pos_assigned_gt_inds, dim=0)
+
+        if assign_result.labels is not None:
+            raise NotImplementedError
+        else:
+            self.pos_gt_labels = None
+
+    @classmethod
+    def random(cls, rng=None, **kwargs):
+        raise NotImplementedError

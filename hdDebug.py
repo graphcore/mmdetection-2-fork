@@ -16,6 +16,8 @@ else:
 import pickle
 import copy
 def set_func_io_recorder(save_path, save_rounds):
+    # get data out of saved pickle
+    # args, kwargs, results = [records[i][ele] for ele in ['args', 'kwargs', 'results']]
     def io_recorder(func):
         records = []
         counter = [0]
@@ -31,6 +33,7 @@ def set_func_io_recorder(save_path, save_rounds):
                 if counter[0] == save_rounds:
                     with open(save_path, 'wb') as f:
                         pickle.dump(records, f)
+                    print('all data recorded')
                     exit()
             return results
         return inner

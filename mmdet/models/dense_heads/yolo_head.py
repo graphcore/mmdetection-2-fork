@@ -12,7 +12,7 @@ from mmcv.runner import force_fp32
 
 from mmdet.core import (build_assigner, build_bbox_coder,
                         build_prior_generator, build_sampler, images_to_levels,
-                        multi_apply, multiclass_nms)
+                        multi_apply, multiclass_nms, slice_statically)
 from ..builder import HEADS, build_loss
 from .base_dense_head import BaseDenseHead
 from .dense_test_mixins import BBoxTestMixin
@@ -46,6 +46,7 @@ class YOLOV3Head(BaseDenseHead, BBoxTestMixin):
         train_cfg (dict): Training config of YOLOV3 head. Default: None.
         test_cfg (dict): Testing config of YOLOV3 head. Default: None.
         init_cfg (dict or list[dict], optional): Initialization config dict.
+        static (bool): whether to inference and train statically
     """
 
     def __init__(self,
@@ -81,7 +82,8 @@ class YOLOV3Head(BaseDenseHead, BBoxTestMixin):
                  test_cfg=None,
                  init_cfg=dict(
                      type='Normal', std=0.01,
-                     override=dict(name='convs_pred'))):
+                     override=dict(name='convs_pred')),
+                 static=False,):
         super(YOLOV3Head, self).__init__(init_cfg)
         # Check params
         assert (len(in_channels) == len(out_channels) == len(featmap_strides))
@@ -92,12 +94,13 @@ class YOLOV3Head(BaseDenseHead, BBoxTestMixin):
         self.featmap_strides = featmap_strides
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
+        self.static = static
         if self.train_cfg:
             self.assigner = build_assigner(self.train_cfg.assigner)
             if hasattr(self.train_cfg, 'sampler'):
                 sampler_cfg = self.train_cfg.sampler
             else:
-                sampler_cfg = dict(type='PseudoSampler')
+                sampler_cfg = dict(type='PseudoSampler', static=self.static)
             self.sampler = build_sampler(sampler_cfg, context=self)
         self.fp16_enabled = False
 
@@ -429,6 +432,7 @@ class YOLOV3Head(BaseDenseHead, BBoxTestMixin):
 
         return target_maps_list, neg_maps_list
 
+    # @hdDebug.set_func_io_recorder('_get_targets_single.pkl', 100)
     def _get_targets_single(self, anchors, responsible_flags, gt_bboxes,
                             gt_labels):
         """Generate matching bounding box prior and converted GT.
@@ -460,37 +464,71 @@ class YOLOV3Head(BaseDenseHead, BBoxTestMixin):
         anchor_strides = torch.cat(anchor_strides)
         assert len(anchor_strides) == len(concat_anchors) == \
                len(concat_responsible_flags)
-        if hdDebug.skip_assigner:
-            from mmdet.core.bbox.assigners.assign_result import AssignResult
-            assign_result = AssignResult(None,None,None,None)
-            assign_result.load(f'yolo_assign_result_{hdDebug.assigner_counter}')
-            hdDebug.assigner_counter += 1
-        else:
-            assign_result = self.assigner.assign(concat_anchors,
-                                                 concat_responsible_flags,
-                                                 gt_bboxes)
-            # assign_result.save(f'yolo_assign_result_{hdDebug.assigner_counter}')# hdDebug
-            # hdDebug.assigner_counter += 1
+        assign_result = self.assigner.assign(concat_anchors,
+                                             concat_responsible_flags,
+                                             gt_bboxes)
         sampling_result = self.sampler.sample(assign_result, concat_anchors,
                                               gt_bboxes)
 
-        target_map = concat_anchors.new_zeros(
-            concat_anchors.size(0), self.num_attrib)
+        if self.static:
+            # sampling_result.pos_inds have pads
+            # slice anchor_strides for encoding
+            # pos_bboxes and pos_gt_bboxes have been sliced by pos_inds
+            pos_anchor_strides = slice_statically(
+                anchor_strides, sampling_result.pos_inds, dim=0)
+            encoded_bboxes = self.bbox_coder.encode(
+                sampling_result.pos_bboxes, sampling_result.pos_gt_bboxes,
+                pos_anchor_strides)
+            # encoded_bboxes have some invalid lines caused by pad of pos_inds
+            # so it should be masked
+            masked_encoded_bboxes = encoded_bboxes * \
+                sampling_result.pos_flags.unsqueeze(-1)
 
-        target_map[sampling_result.pos_inds, :4] = self.bbox_coder.encode(
-            sampling_result.pos_bboxes, sampling_result.pos_gt_bboxes,
-            anchor_strides[sampling_result.pos_inds])
+            have_objects = masked_encoded_bboxes.new_ones(
+                encoded_bboxes.shape[0]).unsqueeze(-1)
 
-        target_map[sampling_result.pos_inds, 4] = 1
+            gt_labels_one_hot = F.one_hot(
+                gt_labels, num_classes=self.num_classes).float()
+            if self.one_hot_smoother != 0:  # label smooth
+                gt_labels_one_hot = gt_labels_one_hot * (
+                    1 - self.one_hot_smoother
+                ) + self.one_hot_smoother / self.num_classes
+            # gt_labels_one_hot should also be sliced
+            # pos_assigned_gt_inds maps from sampled positive box to
+            # gt-box idx(start from 0)
+            padded_gt_labels_one_hot = slice_statically(
+                gt_labels_one_hot, sampling_result.pos_assigned_gt_inds, dim=0)
+            
+            target_map = torch.cat([masked_encoded_bboxes, have_objects,
+                                    padded_gt_labels_one_hot], dim=1)
 
-        gt_labels_one_hot = F.one_hot(
-            gt_labels, num_classes=self.num_classes).float()
-        if self.one_hot_smoother != 0:  # label smooth
-            gt_labels_one_hot = gt_labels_one_hot * (
-                1 - self.one_hot_smoother
-            ) + self.one_hot_smoother / self.num_classes
-        target_map[sampling_result.pos_inds, 5:] = gt_labels_one_hot[
-            sampling_result.pos_assigned_gt_inds]
+            # now we need to map sampled positive data back to the order
+            # of anchors sampling_result.pos_inds maps from anchors to
+            # positive samples
+            back_mapping_indices = F.one_hot(
+                sampling_result.pos_inds.clip(0),
+                num_classes=anchor_strides.shape[0]).permute(1,0)
+            target_map = torch.matmul(back_mapping_indices.float(), target_map)
+            # there are some invalid data caused by padding, mask them
+            positive_anchor_flags = assign_result.gt_inds > 0
+            target_map = target_map * positive_anchor_flags.unsqueeze(-1)
+        else:
+            target_map = concat_anchors.new_zeros(
+                concat_anchors.size(0), self.num_attrib)
+            target_map[sampling_result.pos_inds, :4] = self.bbox_coder.encode(
+                sampling_result.pos_bboxes, sampling_result.pos_gt_bboxes,
+                anchor_strides[sampling_result.pos_inds])
+
+            target_map[sampling_result.pos_inds, 4] = 1
+
+            gt_labels_one_hot = F.one_hot(
+                gt_labels, num_classes=self.num_classes).float()
+            if self.one_hot_smoother != 0:  # label smooth
+                gt_labels_one_hot = gt_labels_one_hot * (
+                    1 - self.one_hot_smoother
+                ) + self.one_hot_smoother / self.num_classes
+            target_map[sampling_result.pos_inds, 5:] = gt_labels_one_hot[
+                sampling_result.pos_assigned_gt_inds]
 
         neg_map = concat_anchors.new_zeros(
             concat_anchors.size(0), dtype=torch.uint8)

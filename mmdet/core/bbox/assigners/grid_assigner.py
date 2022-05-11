@@ -33,7 +33,8 @@ class GridAssigner(BaseAssigner):
                  neg_iou_thr,
                  min_pos_iou=.0,
                  gt_max_assign_all=True,
-                 iou_calculator=dict(type='BboxOverlaps2D')):
+                 iou_calculator=dict(type='BboxOverlaps2D'),
+                 static=False):
         self.pos_iou_thr = pos_iou_thr
         self.neg_iou_thr = neg_iou_thr
         if isinstance(neg_iou_thr, float):
@@ -41,6 +42,7 @@ class GridAssigner(BaseAssigner):
         self.min_pos_iou = min_pos_iou
         self.gt_max_assign_all = gt_max_assign_all
         self.iou_calculator = build_iou_calculator(iou_calculator)
+        self.static = static
 
     def tmp_aux(self,
                 bboxes,
@@ -156,6 +158,7 @@ class GridAssigner(BaseAssigner):
             positive_inds = positive_inds.max(0).values
         positive_inds_mask = (positive_inds > 0.0).float()
         assigned_gt_inds = positive_inds + assigned_gt_inds*(1-positive_inds_mask)
+        assigned_gt_inds = assigned_gt_inds.long()
 
         # assign labels of positive anchors
         if gt_labels is not None:
@@ -196,7 +199,7 @@ class GridAssigner(BaseAssigner):
         Returns:
             :obj:`AssignResult`: The assign result.
         """
-        if hdDebug.ipu_mode:
+        if hdDebug.ipu_mode or self.static:
             # print('run statically_assign')
             return self.statically_assign(bboxes, box_responsible_flags, gt_bboxes, gt_labels)
         num_gts, num_bboxes = gt_bboxes.size(0), bboxes.size(0)

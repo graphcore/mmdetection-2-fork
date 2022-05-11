@@ -3,6 +3,7 @@ from functools import partial
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from six.moves import map, zip
 
 from ..mask.structures import BitmapMasks, PolygonMasks
@@ -206,3 +207,30 @@ def generate_coordinate(featmap_sizes, device='cuda'):
     coord_feat = torch.cat([x, y], 1)
 
     return coord_feat
+
+
+def slice_statically(tensor, indices, dim):
+    """Slice tensor accroding given dimension and indices
+
+    Args:
+        tensor (Tensor): The tensor to be sliced
+        indices (Tensor): The indices on the specified dimension,
+            if negative indices are seemed as 0.
+        dim (int): Target dimension
+    Returns:
+        result (Tensor): Sliced tensor
+    """
+    # negative_flags = (indices < 0).float()
+    indices = indices.clip(0)
+    selectors = F.one_hot(indices, num_classes=tensor.shape[dim]).float()
+    if dim != 0:
+        tensor = tensor.permute([0, dim])
+    org_type = tensor.dtype
+    tensor = tensor.float()
+    result = torch.matmul(selectors, tensor)
+    # for i in range(len(tensor.shape)-1):
+    #     negative_flags = negative_flags.unsqueeze(-1)
+    # result = (1 - negative_flags) * result
+    if dim != 0:
+        result = result.permute([dim, 0])
+    return result.to(org_type)
